@@ -1,0 +1,11 @@
+[package]
+name = "legacy-paper-dump"
+version = "0.1.0"
+authors = ["William R. Fraser <wfraser@codewise.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dropbox-sdk = { version = "0.11.1", default-features = false, features = ["default_client", "dbx_paper"] }
+anyhow = "1.0.38"
