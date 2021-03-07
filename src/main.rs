@@ -2,6 +2,11 @@ use anyhow::{Context, Result};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::paper::{self, ExportFormat, ListPaperDocsArgs, ListPaperDocsContinueArgs, PaperDocExport};
 use std::env;
+use std::fs::{self, OpenOptions};
+use std::io;
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 fn get_oauth2_token() -> String {
     env::var("DBX_OAUTH_TOKEN")
@@ -9,7 +14,16 @@ fn get_oauth2_token() -> String {
 }
 
 fn main() -> Result<()> {
+    let mut export = false;
+    if env::args().skip(1).next().as_deref() == Some("--export") {
+        export = true;
+    }
+
     let client = UserAuthDefaultClient::new(get_oauth2_token());
+
+    if export {
+        let _ = fs::create_dir("docs");
+    }
 
     let mut result = paper::docs_list(&client, &ListPaperDocsArgs::default())
         .context("paper/docs/list HTTP or transport err")?
@@ -28,18 +42,19 @@ fn main() -> Result<()> {
         println!("https://paper.dropbox.com/doc/{}", id);
 
         let mut failures = 0;
-        let export_result = loop {
+        let mut export_result = loop {
             if failures >= 3 {
+                println!("too many errors; skipping doc");
                 continue 'doc;
             }
 
             match paper::docs_download(
                 &client,
                 &PaperDocExport::new(id.to_owned(), ExportFormat::Html),
-                Some(0), // don't need the content
-                Some(0), // so just request zero bytes
+                if export { None } else { Some(0) },
+                if export { None } else { Some(0) },
             ) {
-                Ok(Ok(result)) => break result.result,
+                Ok(Ok(result)) => break result,
                 Ok(Err(api_err)) => {
                     println!("API error: {}", api_err);
                     // Not retriable. Skip this doc.
@@ -54,10 +69,31 @@ fn main() -> Result<()> {
                 }
             }
             failures += 1;
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            thread::sleep(Duration::from_secs(3));
         };
-        println!("title: {}", export_result.title);
-        println!("owner: {}", export_result.owner);
+
+        println!("title: {}", export_result.result.title);
+        println!("owner: {}", export_result.result.owner);
+
+        if !export {
+            continue;
+        }
+
+        let path = PathBuf::from("docs")
+            .join(format!("{} ({}).html", export_result.result.title.replace('/', "_"), id));
+        match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(mut f) => {
+                if let Err(e) = io::copy(export_result.body.as_mut().expect("missing body"), &mut f) {
+                    println!("I/O error writing doc {:?}: {}", path, e);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                println!("file already downloaded; skipping");
+            }
+            Err(e) => {
+                println!("failed to create file {:?}: {}", path, e);
+            }
+        }
     }
 
     Ok(())
