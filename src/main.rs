@@ -235,7 +235,7 @@ fn fetch_image(url: &str) -> Result<String, String> {
     let path = format!("images/{}", filename);
     let docs_path = format!("docs/{}", path);
 
-    let mut file = match OpenOptions::new().create_new(true).write(true)
+    let file = match OpenOptions::new().create_new(true).write(true)
         .open(&docs_path)
     {
         Ok(f) => f,
@@ -247,21 +247,28 @@ fn fetch_image(url: &str) -> Result<String, String> {
         }
     };
 
-    let mut body = match ureq::get(url).call() {
-        Ok(response) => response.into_reader(),
-        Err(e) => {
-            drop(file);
-            let _ = fs::remove_file(&docs_path);
-            return Err(format!("failed to fetch {}: {}", url, e));
-        }
-    };
+    fn inner(mut file: std::fs::File, url: &str) -> Result<(), String> {
+        let mut body = match ureq::get(url).call() {
+            Ok(response) => {
+                let ct = response.header("content-type").unwrap_or("");
+                if !ct.starts_with("image/") {
+                    return Err(format!("{}: content type is {:?}", url, ct));
+                }
+                response.into_reader()
+            }
+            Err(e) => return Err(format!("failed to fetch {}: {}", url, e)),
+        };
 
-    match io::copy(&mut body, &mut file) {
-        Ok(_) => Ok(path),
-        Err(e) => {
-            drop(file);
-            let _ = fs::remove_file(&docs_path);
-            Err(format!("failed to download {} to {}: {}", url, path, e))
-        }
+        io::copy(&mut body, &mut file)
+            .map_err(|e| format!("failed to download {}: {}", url, e))
+            .map(|_|())
     }
+
+    let result = inner(file, url);
+
+    if result.is_err() {
+        let _ = fs::remove_file(&docs_path);
+    }
+
+    result.map(|()| path)
 }
