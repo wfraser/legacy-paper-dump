@@ -9,4 +9,8 @@ edition = "2018"
 [dependencies]
 dropbox-sdk = { version = "0.11.1", default-features = false, features = ["default_client", "dbx_paper"] }
 anyhow = "1.0.38"
+regex = "1.4.3"
+ring = "0.16.20"
 threadpool = "1.8.1"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+url = "2.2.1"
