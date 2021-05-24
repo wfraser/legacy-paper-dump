@@ -9,8 +9,9 @@ click the `Generate` button.
 
 Then in your shell, type `export DBX_OAUTH_TOKEN=<that string>`.
 
-Then run `cargo run | tee output.txt` and it'll do its thing. Most of the time is spent fetching
-metadata for the docs so it can give you titles, which has to be done one doc at a time...
+Then run `cargo run | tee output.txt` and it'll do its thing, writing out the
+docs (and as many attached images as it can find and download) to a
+subdirectory of your current directory named `docs/`.
 
-It'll warn about deprecated functions, because we're using the legacy Paper API which is, in fact,
-deprecated.
+Note that compiling this will warn about deprecated functions, because we're
+using the legacy Paper API which is, in fact, deprecated.
