@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::paper::{self, ExportFormat, ListPaperDocsArgs, ListPaperDocsContinueArgs, PaperDocExport};
 use regex::bytes::Regex;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::ops::Range;
 use std::path::PathBuf;
@@ -13,6 +15,19 @@ use std::thread;
 use std::time::Duration;
 use threadpool::ThreadPool;
 use url::Url;
+
+#[derive(Default, Deserialize, Serialize)]
+struct DocInfo {
+    url: String,
+    name: String,
+    owner: String,
+    path: String,
+}
+
+#[derive(Deserialize, Serialize, Default)]
+struct DocList {
+    docs: Vec<DocInfo>,
+}
 
 fn get_oauth2_token() -> String {
     env::var("DBX_OAUTH_TOKEN")
@@ -27,10 +42,31 @@ fn main() -> Result<()> {
 
     let client = Arc::new(UserAuthDefaultClient::new(get_oauth2_token()));
 
+    let _ = fs::create_dir("docs");
     if export {
-        let _ = fs::create_dir("docs");
         let _ = fs::create_dir("docs/images");
     }
+
+    let list = match File::open("docs/list.json") {
+        Ok(file) => match serde_json::from_reader(file) {
+            Ok(list) => list,
+            Err(e) => {
+                eprintln!("error deserializing docs/list.json: {}", e);
+                DocList::default()
+            }
+        }
+        Err(e) => {
+            if e.kind() != io::ErrorKind::NotFound {
+                eprintln!("error opening docs/list.json: {}", e);
+            }
+            DocList::default()
+        }
+    };
+    let mut map = HashMap::new();
+    for doc in list.docs.into_iter() {
+        map.insert(doc.url.clone(), doc);
+    }
+    let map = Arc::new(Mutex::new(map));
 
     let mut result = paper::docs_list(&*client, &ListPaperDocsArgs::default())
         .context("paper/docs/list HTTP or transport err")?
@@ -50,8 +86,9 @@ fn main() -> Result<()> {
     for id in ids.into_iter() {
         let client = Arc::clone(&client);
         let images_pool = Arc::clone(&images_pool);
+        let doc_map = Arc::clone(&map);
         pages_pool.execute(move || {
-            let output = fetch_doc(&id, client, export, images_pool);
+            let output = fetch_doc(&id, client, export, images_pool, doc_map);
             let out = io::stdout();
             let mut lock = out.lock();
             let _ = writeln!(lock, "{}", output);
@@ -59,6 +96,36 @@ fn main() -> Result<()> {
     }
 
     pages_pool.join();
+
+    let mut docs = DocList {
+        docs: Arc::try_unwrap(map)
+            .unwrap_or_else(|_| panic!("unable to unwrap doc map arc"))
+            .into_inner()
+            .expect("unable to unwrap doc ma mutex")
+            .into_iter()
+            .map(|(_k, v)| v)
+            .collect(),
+    };
+
+    docs.docs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut file = File::create("docs/list.json").expect("failed to create docs/list.json");
+    serde_json::to_writer(&mut file, &docs).expect("failed to serialize docs/list.json");
+
+    let mut index = File::create("docs/index.html").expect("failed to create docs/index.html");
+    writeln!(&mut index, "<html><head><title>Paper Doc Index</title></head><body>").unwrap();
+    for doc in &docs.docs {
+        let path_url = url::form_urlencoded::byte_serialize(doc.path.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        writeln!(&mut index, "<p><a href=\"{}\">{}</a><br><small>{}</small> &middot; <small><a href=\"{}\">link</a></small>",
+            path_url,
+            doc.name,
+            doc.owner,
+            doc.url,
+        ).unwrap();
+    }
+    writeln!(&mut index, "</body></html>").unwrap();
 
     Ok(())
 }
@@ -68,9 +135,17 @@ fn fetch_doc(
     client: Arc<UserAuthDefaultClient>,
     export: bool,
     images_pool: Arc<Mutex<ThreadPool>>,
+    doc_map: Arc<Mutex<HashMap<String, DocInfo>>>,
 ) -> String {
+    let url = format!("https://paper.dropbox.com/doc/{}", id);
+
     // buffer output until we're done, so that we don't interleave with other jobs
-    let mut output = format!("https://paper.dropbox.com/doc/{}\n", id);
+    let mut output = url.clone() + "\n";
+
+    if doc_map.lock().unwrap().contains_key(&url) {
+        output += "already downloaded; skipping\n";
+        return output;
+    }
 
     let mut failures = 0;
     let mut export_result = loop {
@@ -111,8 +186,27 @@ fn fetch_doc(
         return output;
     }
 
-    let path = PathBuf::from("docs")
-        .join(format!("{} ({}).html", export_result.result.title.replace('/', "_"), id));
+    let mut filename = export_result.result.title.chars()
+        .filter_map(|c| {
+            if c.is_ascii() {
+                if c == '/' || c == '\\' || c == ':' {
+                    Some('_')
+                } else {
+                    Some(c)
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    if filename.is_empty() {
+        filename += "(unprintable)";
+    }
+    filename += &format!(" ({}).html", id);
+
+    let path = PathBuf::from("docs").join(&filename);
     let mut file = match OpenOptions::new().create_new(true).write(true).open(&path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -132,6 +226,16 @@ fn fetch_doc(
         output += &format!("I/O error reading doc: {}\n", e);
         return output;
     }
+
+    let doc_info = DocInfo {
+        url: url.clone(),
+        name: export_result.result.title,
+        owner: export_result.result.owner,
+        path: filename,
+    };
+
+    doc_map.lock().unwrap()
+        .insert(url, doc_info);
 
     let img_re = Regex::new(r#"(?P<stuff1><img( [^>]*)+) src="(?P<url>[^"]+)"(?P<stuff2>[^>]*>)"#)
         .expect("bad regular expression");
