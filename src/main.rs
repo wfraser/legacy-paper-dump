@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::paper::{self, ExportFormat, ListPaperDocsArgs, ListPaperDocsContinueArgs, PaperDocExport};
+use dropbox_sdk::oauth2::get_auth_from_env_or_prompt;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,18 +30,13 @@ struct DocList {
     docs: Vec<DocInfo>,
 }
 
-fn get_oauth2_token() -> String {
-    env::var("DBX_OAUTH_TOKEN")
-        .expect("need environment variable DBX_OAUTH_TOKEN to be set")
-}
-
 fn main() -> Result<()> {
     let mut export = false;
     if env::args().nth(1).as_deref() == Some("--export") {
         export = true;
     }
 
-    let client = Arc::new(UserAuthDefaultClient::new(get_oauth2_token()));
+    let client = Arc::new(UserAuthDefaultClient::new(get_auth_from_env_or_prompt()));
 
     let _ = fs::create_dir("docs");
     if export {
