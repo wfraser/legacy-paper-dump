@@ -238,33 +238,33 @@ fn fetch_doc(
     doc_map.lock().unwrap()
         .insert(url, doc_info);
 
-    let img_re = Regex::new(r#"(?P<stuff1><img( [^>]*)+) src="(?P<url>[^"]+)"(?P<stuff2>[^>]*>)"#)
+    let img_re = Regex::new(r#"<img( [^>]+)* src="(?P<url>[^"]+)"[^>]*>"#)
         .expect("bad regular expression");
     let mut images = vec![];
     for m in img_re.captures_iter(&html) {
-        let url = match std::str::from_utf8(&m["url"]) {
+        let original_tag = match std::str::from_utf8(m.get(0).unwrap().as_bytes()) {
             Ok(s) => s.to_owned(),
             Err(e) => {
-                output += &format!("non-UTF8 url {:?}: {}\n", &m["url"], e);
+                output += &format!("non-UTF8 image tag {:?}: {}\n", &m, e);
                 continue;
             }
         };
-        images.push((m.get(0).unwrap().range(), (&m["stuff1"]).to_vec(), url, (&m["stuff2"]).to_vec()));
+        let url = std::str::from_utf8(&m["url"]).unwrap().to_owned();
+        if url.starts_with("data:") {
+            continue;
+        }
+        let original_range = m.get(0).unwrap().range();
+        images.push((original_range, original_tag, url));
     }
 
     let (tx, rx) = mpsc::channel();
     let image_cnt = images.len();
     let images_pool_locked = images_pool.lock().unwrap();
-    for (Range { start, end }, stuff1, url, stuff2) in images {
+    for (Range { start, end }, original_tag, url) in images {
         let tx = tx.clone();
         images_pool_locked.execute(move || {
             let result = fetch_image(&url)
-                .map(|path| {
-                    let mut replacement = stuff1;
-                    replacement.extend_from_slice(format!(" src=\"{}\"", path).as_bytes());
-                    replacement.extend_from_slice(&stuff2);
-                    (start, end, replacement)
-                });
+                .map(|path| (start, end, original_tag.replace(&url, &path).into_bytes()));
             tx.send(result).expect("channel busted");
         })
     }
