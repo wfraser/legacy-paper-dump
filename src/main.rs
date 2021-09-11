@@ -329,24 +329,32 @@ fn fetch_image(url: &str) -> Result<String, String> {
     let hash = hash_str(url);
 
     let parts = filename.rsplitn(2, '.').collect::<Vec<_>>();
-    let filename = if parts.len() == 2 {
+    let mut filename = if parts.len() == 2 {
         format!("{} __{}.{}", parts[1], hash, parts[0])
     } else {
         format!("{} __{}", parts[0], hash)
     };
 
-    let path = format!("images/{}", filename);
-    let docs_path = format!("docs/{}", path);
-
-    let file = match OpenOptions::new().create_new(true).write(true)
-        .open(&docs_path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            return Ok(path);
-        }
-        Err(e) => {
-            return Err(format!("failed to create file {}: {}", path, e));
+    let (path, file) = loop {
+        let path = format!("images/{}", filename);
+        let docs_path = format!("docs/{}", path);
+        match OpenOptions::new().create_new(true).write(true)
+            .open(&docs_path)
+        {
+            Ok(f) => break (docs_path, f),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                return Ok(path);
+            }
+            Err(e) => {
+                #[cfg(unix)]
+                if e.raw_os_error() == Some(libc::ENAMETOOLONG) {
+                    if filename != hash {
+                        filename = hash.clone();
+                        continue;
+                    }
+                }
+                return Err(format!("failed to create file {}: {}", path, e));
+            }
         }
     };
 
@@ -370,7 +378,7 @@ fn fetch_image(url: &str) -> Result<String, String> {
     let result = inner(file, url);
 
     if result.is_err() {
-        let _ = fs::remove_file(&docs_path);
+        let _ = fs::remove_file(&path);
     }
 
     result.map(|()| path)
