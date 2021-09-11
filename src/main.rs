@@ -31,9 +31,18 @@ struct DocList {
 }
 
 fn main() -> Result<()> {
-    let mut export = false;
-    if env::args().nth(1).as_deref() == Some("--export") {
-        export = true;
+    let mut export = true;
+
+    match env::args().nth(1).as_deref() {
+        Some("--no-export") => { export = false; }
+        None => (),
+        _ => {
+            eprintln!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            eprintln!("usage: legacy-paper-dump [--no-export]");
+            eprintln!("unless --no-export is specified, writes all docs to a folder 'docs' in the\
+                current directory.");
+            std::process::exit(1);
+        }
     }
 
     let client = Arc::new(UserAuthDefaultClient::new(get_auth_from_env_or_prompt()));
