@@ -64,15 +64,18 @@ fn main() -> Result<()> {
     }
     let map = Arc::new(Mutex::new(map));
 
+    #[allow(deprecated)]
     let mut result = paper::docs_list(&*client, &ListPaperDocsArgs::default())
         .context("paper/docs/list HTTP or transport err")?
         .context("paper/docs/list API err")?;
     let mut ids = result.doc_ids;
     while result.has_more {
-        result = paper::docs_list_continue(&*client, &ListPaperDocsContinueArgs::new(
+        #[allow(deprecated)]
+        let next = paper::docs_list_continue(&*client, &ListPaperDocsContinueArgs::new(
                 result.cursor.value))
             .context("paper/docs/list/continue HTTP or transport err")?
             .context("paper/docs/list/continue API err")?;
+        result = next;
         ids.extend_from_slice(&result.doc_ids);
     }
 
@@ -150,12 +153,14 @@ fn fetch_doc(
             return output;
         }
 
-        match paper::docs_download(
+        #[allow(deprecated)]
+        let download_result = paper::docs_download(
             &*client,
             &PaperDocExport::new(id.to_owned(), ExportFormat::Html),
             if export { None } else { Some(0) },
             if export { None } else { Some(0) },
-        ) {
+        );
+        match download_result {
             Ok(Ok(result)) => break result,
             Ok(Err(api_err)) => {
                 output += &format!("API error: {}\n", api_err);
