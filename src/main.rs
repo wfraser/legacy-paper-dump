@@ -230,13 +230,13 @@ fn fetch_doc(
 
     let doc_info = DocInfo {
         url: url.clone(),
-        name: export_result.result.title,
-        owner: export_result.result.owner,
+        name: export_result.result.title.clone(),
+        owner: export_result.result.owner.clone(),
         path: filename,
     };
 
     doc_map.lock().unwrap()
-        .insert(url, doc_info);
+        .insert(url.clone(), doc_info);
 
     let img_re = Regex::new(r#"<img( [^>]+)* src="(?P<url>[^"]+)"[^>]*>"#)
         .expect("bad regular expression");
@@ -287,7 +287,14 @@ fn fetch_doc(
     replacements.sort_by(|a, b| a.0.cmp(&b.0));
     output += &format!("downloaded {} of {} images\n", replacements.len(), response_cnt);
 
-    let mut html2 = vec![];
+    let mut html2 = format!("<!DOCTYPE html><html><head><title>{title}</title></head>\
+        <body><p>\
+            downloaded on {date} from <a href=\"{url}\">{url}</a><br>
+            owned by {owner}</p>\n",
+        title=export_result.result.title,
+        owner=export_result.result.owner,
+        url=url,
+        date=chrono::Local::now().to_rfc2822()).into_bytes();
     let mut last_end = 0;
     for (start, end, replacement) in replacements {
         html2.extend_from_slice(&html[last_end .. start]);
@@ -295,6 +302,7 @@ fn fetch_doc(
         last_end = end;
     }
     html2.extend_from_slice(&html[last_end ..]);
+    html2.extend_from_slice(b"</body></html>\n");
 
     if let Err(e) = file.write_all(&html2) {
         output += &format!("I/O error writing file {:?}: {}\n", path, e);
@@ -305,19 +313,9 @@ fn fetch_doc(
 }
 
 fn hash_str(s: &str) -> String {
-    use ring::digest::*;
-
-    let mut ctx = Context::new(&SHA256);
-    ctx.update(s.as_bytes());
-    let digest = ctx.finish();
-
-    let mut out = String::new();
-    for byte in digest.as_ref() {
-        // Rather than doing base64 or something, use Unicode blocks Latin-Extended A and B, which
-        // provide >256 contiguous, printable, filename-safe characters.
-        out.push(std::char::from_u32(0x0100 + *byte as u32).unwrap());
-    }
-    out
+    use ring::digest::{digest, SHA256};
+    let hash = digest(&SHA256, s.as_bytes());
+    base64::encode_config(&hash, base64::URL_SAFE_NO_PAD)
 }
 
 fn fetch_image(url: &str) -> Result<String, String> {
