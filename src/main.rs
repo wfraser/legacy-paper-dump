@@ -298,10 +298,11 @@ fn fetch_doc(
 
     let mut html2 = format!("<!DOCTYPE html><html><head><title>{title}</title></head>\
         <body><p>\
-            downloaded on {date} from <a href=\"{url}\">{url}</a><br>
+            downloaded rev {rev} on {date} from <a href=\"{url}\">{url}</a><br>
             owned by {owner}</p>\n",
         title=export_result.result.title,
         owner=export_result.result.owner,
+        rev=export_result.result.revision,
         url=url,
         date=chrono::Local::now().to_rfc2822()).into_bytes();
     let mut last_end = 0;
